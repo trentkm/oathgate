@@ -309,6 +309,16 @@ func (m Model) Size() (cols, rows int) {
 	return s.cols, s.rows
 }
 
+// QueueScroll coalesces a scroll delta exactly as the widget's own wheel
+// handling does: movement accumulates and lands in one scheduled update,
+// so a high-resolution trackpad cannot change the view faster than a
+// terminal can draw it. For embedders that route wheel events themselves
+// (positionally, say) instead of focusing the widget. Run the returned
+// command like any other; it may be nil.
+func (m Model) QueueScroll(delta int) tea.Cmd {
+	return m.queueScroll(delta)
+}
+
 // ScrollBy moves the view within main-screen history; positive is up into
 // the past. The alternate screen has no past to move through.
 func (m Model) ScrollBy(delta int) {
