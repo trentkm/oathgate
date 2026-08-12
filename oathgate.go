@@ -413,11 +413,17 @@ func (m Model) View() string {
 	if s.scroll == 0 || s.emu.IsAltScreen() {
 		lines := strings.Split(s.emu.Render(), "\n")
 		if len(lines) > s.rows {
-			// A terminal taller than the box is clipped to the window that
-			// keeps the cursor visible: a freshly-grown pane has its action
-			// at the top, a long-lived one at the bottom, and blindly
-			// keeping bottom rows shows blank space for the former.
-			bottom := min(len(lines), max(s.emu.CursorPosition().Y+1, s.rows))
+			// A terminal taller than the box is clipped bottom-anchored —
+			// terminal apps keep their live region (input line, status
+			// bar) at the bottom, and those rows may sit BELOW the cursor,
+			// so a window that merely ends at the cursor hides them. The
+			// window slides up only when the cursor would fall above it: a
+			// freshly-grown pane has its action (and cursor) at the top,
+			// and blindly keeping bottom rows would show blank space.
+			bottom := len(lines)
+			if cursorRow := s.emu.CursorPosition().Y; cursorRow < bottom-s.rows {
+				bottom = max(cursorRow+1, s.rows)
+			}
 			lines = lines[bottom-s.rows : bottom]
 		}
 		grid = strings.Join(lines, "\n")
@@ -460,11 +466,15 @@ func (m Model) Cursor() (x, y int, ok bool) {
 		return 0, 0, false
 	}
 	cursor := s.emu.CursorPosition()
-	// The view clips a too-tall terminal to the window that keeps the
-	// cursor visible (see View); the cursor shifts with that same window.
+	// The view clips a too-tall terminal bottom-anchored, sliding up only
+	// to keep the cursor visible (see View); the cursor shifts with that
+	// same window.
 	clipTop := 0
 	if s.termRows > s.rows {
-		bottom := min(s.termRows, max(cursor.Y+1, s.rows))
+		bottom := s.termRows
+		if cursor.Y < bottom-s.rows {
+			bottom = max(cursor.Y+1, s.rows)
+		}
 		clipTop = bottom - s.rows
 	}
 	row := cursor.Y - clipTop

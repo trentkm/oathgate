@@ -340,6 +340,29 @@ func TestTallTerminalClipFollowsTheCursor(t *testing.T) {
 	}
 }
 
+func TestTallTerminalClipKeepsRowsBelowTheCursor(t *testing.T) {
+	transport := newFakeTransport("")
+	m := New(transport, 40, 10)
+	defer m.Close()
+	m.SetTerminalSize(80, 30)
+	// The claude-code shape: a status bar on the LAST terminal row, the
+	// cursor parked on an input line two rows above it. A clip window
+	// that merely ends at the cursor hides the status bar forever.
+	transport.output <- []byte("\x1b[30;1Hstatus bar\x1b[28;1Hinput line \x1b[28;12H")
+	waitForView(t, m, "status bar")
+	lines := strings.Split(plain(m.View()), "\n")
+	if !strings.Contains(lines[9], "status bar") {
+		t.Fatalf("status bar not on box bottom row:\n%s", plain(m.View()))
+	}
+	if !strings.Contains(lines[7], "input line") {
+		t.Fatalf("input line not two rows above:\n%s", plain(m.View()))
+	}
+	x, y, ok := m.Cursor()
+	if !ok || y != 7 || x != 11 {
+		t.Fatalf("cursor at (%d,%d) ok=%v, want (11,7)", x, y, ok)
+	}
+}
+
 func TestDeepScrollMatchesFullHistoryReference(t *testing.T) {
 	var seed strings.Builder
 	for index := 0; index < 300; index++ {
