@@ -9,7 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/trentkm/oathgate"
+	"github.com/trentkm/spanreed"
 )
 
 type testTransport struct {
@@ -89,7 +89,7 @@ func TestFormatBytes(t *testing.T) {
 func TestViewFillsWindowAndOffsetsTerminalCursor(t *testing.T) {
 	raw := newTestTransport()
 	observed := observeTransport(raw)
-	term := oathgate.New(observed, initialCols, initialRows)
+	term := spanreed.New(observed, initialCols, initialRows)
 	defer term.Close()
 
 	model := newSandbox(term, observed, "/bin/sh")

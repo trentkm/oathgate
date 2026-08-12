@@ -1,8 +1,8 @@
-// Package oathgate is an embeddable terminal for Bubble Tea v2: a
+// Package spanreed is an embeddable terminal for Bubble Tea v2: a
 // component that renders a live terminal session inside any TUI, with
 // keyboard forwarding while focused, scrollback, tmux-style clipping, and
 // box-relative cursor reporting.
-package oathgate
+package spanreed
 
 import (
 	"context"

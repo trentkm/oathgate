@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trentkm/oathgate"
+	"github.com/trentkm/spanreed"
 )
 
 type transportSnapshot struct {
@@ -23,11 +23,11 @@ type transportSnapshot struct {
 	TransportDone bool
 }
 
-// observedTransport keeps the sandbox's diagnostics outside oathgate itself.
+// observedTransport keeps the sandbox's diagnostics outside spanreed itself.
 // It forwards every operation unchanged while recording enough information to
 // tell a rendering problem from a quiet or failed transport.
 type observedTransport struct {
-	inner  oathgate.Transport
+	inner  spanreed.Transport
 	seed   []byte
 	output chan []byte
 	debug  *debugLog
@@ -37,7 +37,7 @@ type observedTransport struct {
 	stats     transportSnapshot
 }
 
-func observeTransport(inner oathgate.Transport, logs ...*debugLog) *observedTransport {
+func observeTransport(inner spanreed.Transport, logs ...*debugLog) *observedTransport {
 	seed := append([]byte(nil), inner.Seed()...)
 	var debug *debugLog
 	if len(logs) > 0 {

@@ -1,4 +1,4 @@
-// Package wradapter attaches an oathgate widget to a session living in a
+// Package wradapter attaches a spanreed widget to a session living in a
 // windrunner daemon: the terminal outlives the app embedding it, several
 // apps can watch one session, and Close merely detaches.
 package wradapter
@@ -9,12 +9,12 @@ import (
 
 	"github.com/trentkm/windrunner/client"
 
-	"github.com/trentkm/oathgate"
+	"github.com/trentkm/spanreed"
 )
 
 // Attach opens a dedicated connection to one daemon session, sized to the
 // widget's box before the snapshot is taken.
-func Attach(c *client.Client, sessionID string, cols, rows int) (oathgate.Transport, error) {
+func Attach(c *client.Client, sessionID string, cols, rows int) (spanreed.Transport, error) {
 	if err := c.Resize(sessionID, cols, rows); err != nil {
 		return nil, fmt.Errorf("wradapter: %w", err)
 	}

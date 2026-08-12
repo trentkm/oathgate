@@ -1,4 +1,4 @@
-// Command shell is oathgate's smallest useful embedding: your shell in a
+// Command shell is spanreed's smallest useful embedding: your shell in a
 // box inside a Bubble Tea app. The box owns everything inside its border;
 // ctrl+q leaves.
 package main
@@ -11,14 +11,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/trentkm/oathgate"
-	"github.com/trentkm/oathgate/ptyadapter"
+	"github.com/trentkm/spanreed"
+	"github.com/trentkm/spanreed/ptyadapter"
 )
 
 const chrome = 2 // border cells on each axis
 
 type app struct {
-	term  oathgate.Model
+	term  spanreed.Model
 	ready bool
 }
 
@@ -72,7 +72,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "shell:", err)
 		os.Exit(1)
 	}
-	term := oathgate.New(transport, 80, 24)
+	term := spanreed.New(transport, 80, 24)
 	term.Focus()
 	if _, err := tea.NewProgram(app{term: term}).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "shell:", err)

@@ -1,4 +1,4 @@
-// Command sandbox is an instrumented oathgate embedding for reproducing
+// Command sandbox is an instrumented spanreed embedding for reproducing
 // rendering, clipping, input, scrollback, and resize problems against a real
 // PTY.
 package main
@@ -14,8 +14,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/trentkm/oathgate"
-	"github.com/trentkm/oathgate/ptyadapter"
+	"github.com/trentkm/spanreed"
+	"github.com/trentkm/spanreed/ptyadapter"
 )
 
 const (
@@ -24,8 +24,8 @@ const (
 )
 
 func main() {
-	scrollback := flag.Int("scrollback", oathgate.DefaultScrollback, "maximum scrollback lines")
-	logPath := flag.String("log", "oathgate-sandbox.log", "debug log path; empty disables logging")
+	scrollback := flag.Int("scrollback", spanreed.DefaultScrollback, "maximum scrollback lines")
+	logPath := flag.String("log", "spanreed-sandbox.log", "debug log path; empty disables logging")
 	scrollStress := flag.Int(
 		"scroll-stress",
 		0,
@@ -93,11 +93,11 @@ func main() {
 	}
 
 	observed := observeTransport(transport, debug)
-	term := oathgate.New(
+	term := spanreed.New(
 		observed,
 		initialCols,
 		initialRows,
-		oathgate.WithScrollback(max(0, *scrollback)),
+		spanreed.WithScrollback(max(0, *scrollback)),
 	)
 	defer term.Close()
 

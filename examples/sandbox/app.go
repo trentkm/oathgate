@@ -12,7 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/trentkm/oathgate"
+	"github.com/trentkm/spanreed"
 )
 
 const (
@@ -104,7 +104,7 @@ func calculateLayout(width, height int) sandboxLayout {
 }
 
 type sandbox struct {
-	term      oathgate.Model
+	term      spanreed.Model
 	transport *observedTransport
 	command   string
 	debug     *debugLog
@@ -130,7 +130,7 @@ type sandbox struct {
 	lastAction  string
 }
 
-func newSandbox(term oathgate.Model, transport *observedTransport, command string, logs ...*debugLog) sandbox {
+func newSandbox(term spanreed.Model, transport *observedTransport, command string, logs ...*debugLog) sandbox {
 	term.Focus()
 	boxCols, boxRows := term.Size()
 	termCols, termRows := term.TerminalSize()
@@ -245,7 +245,7 @@ func (s sandbox) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return s, nil
 
-	case oathgate.FrameMsg:
+	case spanreed.FrameMsg:
 		if msg.ID == s.term.ID() {
 			s.frameTotal++
 			s.frameWindow++
@@ -450,9 +450,9 @@ func (s sandbox) View() tea.View {
 	view := tea.NewView("")
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
-	view.WindowTitle = "Oathgate sandbox"
+	view.WindowTitle = "Spanreed sandbox"
 	if !s.ready {
-		view.SetContent("starting oathgate sandbox...")
+		view.SetContent("starting spanreed sandbox...")
 		return view
 	}
 
@@ -505,7 +505,7 @@ func (s sandbox) renderHeader(width int) string {
 	if s.term.Focused() {
 		focus = activeStyle.Render("TERMINAL")
 	}
-	left := titleStyle.Render("OATHGATE") + subtleStyle.Render("  "+s.command)
+	left := titleStyle.Render("SPANREED") + subtleStyle.Render("  "+s.command)
 	right := focus
 	return fixedLine(left, right, width)
 }

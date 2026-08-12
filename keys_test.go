@@ -1,4 +1,4 @@
-package oathgate
+package spanreed
 
 import (
 	"bytes"

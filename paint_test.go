@@ -1,4 +1,4 @@
-package oathgate
+package spanreed
 
 import (
 	"image/color"
@@ -22,14 +22,14 @@ func TestBgDefaultAfter(t *testing.T) {
 		{"48;5;0", false}, // palette arg 0 is a color, not a reset
 		{"48;5;49", false},
 		{"48;2;0;0;0", false},
-		{"48:2:10:20:30", false},  // colon form
-		{"38;5;0", false},         // fg palette arg 0: bg untouched
-		{"38;2;49;49;49", false},  // fg RGB args must not read as 49
-		{"58;5;0", false},         // underline color args likewise
-		{"44;0", true},            // set then reset: default wins
-		{"0;44", false},           // reset then set: set wins
-		{"38;5;196;49", true},     // fg color, then default bg
-		{"?25", false},            // private marker: not SGR params we track
+		{"48:2:10:20:30", false}, // colon form
+		{"38;5;0", false},        // fg palette arg 0: bg untouched
+		{"38;2;49;49;49", false}, // fg RGB args must not read as 49
+		{"58;5;0", false},        // underline color args likewise
+		{"44;0", true},           // set then reset: default wins
+		{"0;44", false},          // reset then set: set wins
+		{"38;5;196;49", true},    // fg color, then default bg
+		{"?25", false},           // private marker: not SGR params we track
 	}
 	for _, c := range cases {
 		if got := bgDefaultAfter(c.params); got != c.want {

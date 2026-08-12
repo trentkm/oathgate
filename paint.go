@@ -1,4 +1,4 @@
-package oathgate
+package spanreed
 
 // Default-background painting. A terminal leaves cells whose background the
 // running program never set at the "terminal default", which renders as

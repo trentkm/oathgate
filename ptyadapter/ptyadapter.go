@@ -1,4 +1,4 @@
-// Package ptyadapter is oathgate's batteries-included transport: spawn a
+// Package ptyadapter is spanreed's batteries-included transport: spawn a
 // process on a PTY inside your own process, no daemon required. Closing
 // the transport ends the process — this is a terminal you own, not a
 // session you visit.
@@ -14,7 +14,7 @@ import (
 
 	"github.com/trentkm/windrunner"
 
-	"github.com/trentkm/oathgate"
+	"github.com/trentkm/spanreed"
 )
 
 // Spec describes the process to spawn. Zero values inherit sensible
@@ -29,7 +29,7 @@ type Spec struct {
 
 // Spawn starts the process on a fresh PTY and returns the transport for
 // it. The returned transport's Close kills the process.
-func Spawn(ctx context.Context, spec Spec, cols, rows int) (oathgate.Transport, error) {
+func Spawn(ctx context.Context, spec Spec, cols, rows int) (spanreed.Transport, error) {
 	engine := windrunner.NewEngine()
 	session, err := engine.Spawn(windrunner.SpawnSpec{
 		Command:    spec.Command,

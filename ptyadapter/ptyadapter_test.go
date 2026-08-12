@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trentkm/oathgate"
+	"github.com/trentkm/spanreed"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
 
 func plain(view string) string { return ansiPattern.ReplaceAllString(view, "") }
 
-func waitForView(t *testing.T, m oathgate.Model, want string) {
+func waitForView(t *testing.T, m spanreed.Model, want string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for !strings.Contains(plain(m.View()), want) {
@@ -35,7 +35,7 @@ func TestWidgetOverOwnedPTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	m := oathgate.New(transport, 60, 12)
+	m := spanreed.New(transport, 60, 12)
 	defer m.Close()
 
 	waitForView(t, m, "boxed shell ready")

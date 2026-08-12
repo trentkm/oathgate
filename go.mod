@@ -1,4 +1,4 @@
-module github.com/trentkm/oathgate
+module github.com/trentkm/spanreed
 
 go 1.25.6
 

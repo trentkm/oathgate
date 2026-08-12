@@ -1,9 +1,9 @@
-# oathgate
+# spanreed
 
 An embeddable terminal for Bubble Tea — a box you can put anywhere that a
 real terminal lives inside.
 
-Oathgate is a [Bubble Tea v2](https://github.com/charmbracelet/bubbletea)
+Spanreed is a [Bubble Tea v2](https://github.com/charmbracelet/bubbletea)
 component that renders a live terminal session as part of your TUI: full
 VT emulation (pure Go, via `charmbracelet/x/vt`), keyboard forwarding when
 focused, scrollback, clipping, and real-cursor placement. It is the
@@ -12,7 +12,7 @@ distinct from the engine underneath.
 
 ```go
 transport, _ := ptyadapter.Spawn(ctx, ptyadapter.Spec{Command: "bash"}, 80, 24)
-term := oathgate.New(transport, 80, 24)
+term := spanreed.New(transport, 80, 24)
 // term.Update(msg), term.View(), term.Cursor() — a bubble like any other.
 ```
 
@@ -49,7 +49,7 @@ Spanreed pane). Unix only for now.
 
 ## Debug sandbox
 
-The instrumented sandbox runs a real shell while exposing Oathgate's box,
+The instrumented sandbox runs a real shell while exposing Spanreed's box,
 emulator, cursor, frame, stream, input, and resize state:
 
 ```sh
@@ -64,7 +64,7 @@ keys to resize the box, shifted arrow keys to resize the underlying terminal,
 `=` to synchronize them, or `1` through `4` to load clipping presets. Press
 `enter` to focus the shell again and `q` to quit from sandbox mode.
 
-Each run appends diagnostics to `oathgate-sandbox.log`, including aggregated
+Each run appends diagnostics to `spanreed-sandbox.log`, including aggregated
 scroll activity, frame and I/O counters, heap usage, slow renders, transport
 errors, and full Go crash output. Terminal output and typed content are not
 logged. Use `-log path/to/file` to choose another file or `-log=` to disable
