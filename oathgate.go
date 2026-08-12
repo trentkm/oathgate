@@ -1,0 +1,386 @@
+// Package oathgate is an embeddable terminal for Bubble Tea v2: a
+// component that renders a live terminal session inside any TUI, with
+// keyboard forwarding while focused, scrollback, tmux-style clipping, and
+// box-relative cursor reporting.
+package oathgate
+
+import (
+	"context"
+	"io"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
+)
+
+// framePeriod caps UI wake-ups: a stream writing byte-by-byte must not
+// schedule a render per byte.
+const framePeriod = 33 * time.Millisecond
+
+// DefaultScrollback bounds the widget's emulator history.
+const DefaultScrollback = 2000
+
+var lastID atomic.Int64
+
+// FrameMsg says a widget has a new frame to draw. Route it (like every
+// message) through the widget's Update; unrelated instances ignore it.
+type FrameMsg struct {
+	ID int64
+}
+
+// Option configures New.
+type Option func(*Model)
+
+// WithScrollback caps emulator history in lines.
+func WithScrollback(lines int) Option {
+	return func(m *Model) { m.state.scrollbackLines = lines }
+}
+
+// WithReleaseKey names the one key the widget gives back while focused
+// (Bubble Tea key string, e.g. "ctrl+q", the default). Everything else is
+// the terminal's.
+func WithReleaseKey(key string) Option {
+	return func(m *Model) { m.releaseKey = key }
+}
+
+// Model is the terminal box. It is a value like any bubble; the live
+// state lives behind a shared pointer so copies stay coherent.
+type Model struct {
+	id         int64
+	state      *termState
+	releaseKey string
+	focused    bool
+}
+
+// termState is everything the Model's copies share: the emulator, the
+// transport, and the frame pump.
+type termState struct {
+	transport Transport
+
+	mu     sync.Mutex
+	emu    *vt.Emulator
+	cols   int
+	rows   int
+	scroll int
+	closed bool
+
+	scrollbackLines int
+	frames          chan struct{}
+	lastNotify      time.Time
+	pending         *time.Timer
+}
+
+// New builds a terminal box of cols x rows over a transport, replays the
+// transport's seed, and starts consuming its stream. Call Close when the
+// box is done; call Init (or hand its command to your program) to start
+// receiving FrameMsg wake-ups.
+func New(transport Transport, cols, rows int, opts ...Option) Model {
+	m := Model{
+		id:         lastID.Add(1),
+		releaseKey: "ctrl+q",
+		state: &termState{
+			transport:       transport,
+			cols:            max(2, cols),
+			rows:            max(2, rows),
+			scrollbackLines: DefaultScrollback,
+			frames:          make(chan struct{}, 1),
+		},
+	}
+	for _, opt := range opts {
+		opt(&m)
+	}
+	s := m.state
+	emu := vt.NewEmulator(s.cols, s.rows)
+	emu.Scrollback().SetMaxLines(s.scrollbackLines)
+	s.emu = emu
+	// The emulator synthesizes answers to queries that ride the output
+	// stream, into an internal pipe whose writes block until read. The
+	// transport's other end is the authority that really answers; here the
+	// pipe is drained so a query can never wedge the render lock.
+	go func() {
+		_, _ = io.Copy(io.Discard, emu)
+	}()
+	s.mu.Lock()
+	s.emu.Write(transport.Seed())
+	s.mu.Unlock()
+	go s.pump()
+	return m
+}
+
+func (s *termState) pump() {
+	for chunk := range s.transport.Output() {
+		s.mu.Lock()
+		s.emu.Write(chunk)
+		if s.scroll != 0 && s.emu.IsAltScreen() {
+			s.scroll = 0
+		}
+		s.mu.Unlock()
+		s.notify()
+	}
+	s.notify()
+}
+
+// notify wakes the UI at most once per framePeriod, with a trailing edge
+// so the final burst of a quiet stream still lands.
+func (s *termState) notify() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if now.Sub(s.lastNotify) >= framePeriod {
+		s.lastNotify = now
+		select {
+		case s.frames <- struct{}{}:
+		default:
+		}
+		return
+	}
+	if s.pending == nil {
+		wait := framePeriod - now.Sub(s.lastNotify)
+		s.pending = time.AfterFunc(wait, func() {
+			s.mu.Lock()
+			s.pending = nil
+			s.lastNotify = time.Now()
+			s.mu.Unlock()
+			select {
+			case s.frames <- struct{}{}:
+			default:
+			}
+		})
+	}
+}
+
+// Init starts the frame pump's UI side.
+func (m Model) Init() tea.Cmd {
+	return m.wait()
+}
+
+func (m Model) wait() tea.Cmd {
+	s := m.state
+	id := m.id
+	return func() tea.Msg {
+		<-s.frames
+		return FrameMsg{ID: id}
+	}
+}
+
+// Update handles frame wake-ups always, and the keyboard while focused:
+// every key becomes terminal input except the release key, which blurs.
+// Mouse wheel scrolls history. Route all messages here, as with any
+// bubble.
+func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case FrameMsg:
+		if msg.ID != m.id {
+			return m, nil
+		}
+		return m, m.wait()
+	case tea.KeyPressMsg:
+		if !m.focused {
+			return m, nil
+		}
+		if msg.String() == m.releaseKey {
+			m.focused = false
+			return m, nil
+		}
+		data := KeyToBytes(msg)
+		if len(data) == 0 {
+			return m, nil
+		}
+		m.ScrollToBottom()
+		return m, m.writeCmd(data)
+	case tea.MouseWheelMsg:
+		if !m.focused {
+			return m, nil
+		}
+		mouse := msg.Mouse()
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			m.ScrollBy(3)
+		case tea.MouseWheelDown:
+			m.ScrollBy(-3)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) writeCmd(data []byte) tea.Cmd {
+	s := m.state
+	return func() tea.Msg {
+		_ = s.transport.Write(data)
+		return nil
+	}
+}
+
+// Write sends bytes to the terminal from code — pasting, scripted input —
+// independent of focus.
+func (m Model) Write(data []byte) error {
+	return m.state.transport.Write(data)
+}
+
+// Focus routes the keyboard to the terminal. Blur (or the release key)
+// hands it back.
+func (m *Model) Focus()            { m.focused = true }
+func (m *Model) Blur()             { m.focused = false }
+func (m Model) Focused() bool      { return m.focused }
+func (m Model) ID() int64          { return m.id }
+func (m Model) ReleaseKey() string { return m.releaseKey }
+
+// SetSize moves the box, the emulator, and (asynchronously) the
+// underlying terminal.
+func (m Model) SetSize(cols, rows int) (Model, tea.Cmd) {
+	cols, rows = max(2, cols), max(2, rows)
+	s := m.state
+	s.mu.Lock()
+	if cols != s.cols || rows != s.rows {
+		s.emu.Resize(cols, rows)
+		s.cols, s.rows = cols, rows
+	}
+	s.mu.Unlock()
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.transport.Resize(ctx, cols, rows)
+		return nil
+	}
+}
+
+// Size reports the box dimensions.
+func (m Model) Size() (cols, rows int) {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cols, s.rows
+}
+
+// ScrollBy moves the view within main-screen history; positive is up into
+// the past. The alternate screen has no past to move through.
+func (m Model) ScrollBy(delta int) {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.emu.IsAltScreen() {
+		return
+	}
+	s.scroll = clamp(s.scroll+delta, 0, s.emu.ScrollbackLen())
+}
+
+// ScrollToBottom returns to the live tail.
+func (m Model) ScrollToBottom() {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scroll = 0
+}
+
+// Scrolled reports how many lines above the live tail the view sits.
+func (m Model) Scrolled() int {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scroll
+}
+
+// AltScreen reports whether the terminal is on its alternate screen.
+func (m Model) AltScreen() bool {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.emu.IsAltScreen()
+}
+
+// View renders exactly rows lines of exactly cols width: scrolled history
+// stitched above live rows when scrolled back, clipped tmux-style (bottom
+// rows, left columns) if the emulator ever runs larger than the box.
+func (m Model) View() string {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var grid string
+	if s.scroll == 0 || s.emu.IsAltScreen() {
+		grid = s.emu.Render()
+	} else {
+		live := strings.Split(s.emu.Render(), "\n")
+		back := s.emu.Scrollback()
+		rows := make([]string, 0, back.Len()+len(live))
+		for index := 0; index < back.Len(); index++ {
+			rows = append(rows, back.Line(index).Render())
+		}
+		rows = append(rows, live...)
+		top := max(0, len(rows)-s.rows-s.scroll)
+		grid = strings.Join(rows[top:min(len(rows), top+s.rows)], "\n")
+	}
+	return fit(grid, s.cols, s.rows)
+}
+
+// Cursor reports the terminal cursor relative to the box's top-left cell.
+// A nested component cannot know where it sits on screen, so the
+// embedding app adds its own origin. ok is false while scrolled back or
+// when the cursor is outside the box.
+func (m Model) Cursor() (x, y int, ok bool) {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scroll != 0 {
+		return 0, 0, false
+	}
+	cursor := s.emu.CursorPosition()
+	if cursor.X < 0 || cursor.X >= s.cols || cursor.Y < 0 || cursor.Y >= s.rows {
+		return 0, 0, false
+	}
+	return cursor.X, cursor.Y, true
+}
+
+// Close detaches from the transport. The widget stops updating; whether
+// the session lives on is the transport's contract.
+func (m Model) Close() {
+	s := m.state
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	if s.pending != nil {
+		s.pending.Stop()
+		s.pending = nil
+	}
+	s.mu.Unlock()
+	s.transport.Close()
+	if pw, ok := s.emu.InputPipe().(io.Closer); ok {
+		pw.Close()
+	}
+}
+
+// fit clamps a rendered grid to exactly cols x rows: too-tall keeps the
+// bottom rows, too-wide keeps the left columns, too-small pads.
+func fit(grid string, cols, rows int) string {
+	lines := strings.Split(grid, "\n")
+	if len(lines) > rows {
+		lines = lines[len(lines)-rows:]
+	}
+	for index, line := range lines {
+		if ansi.StringWidth(line) > cols {
+			lines[index] = ansi.Truncate(line, cols, "")
+		}
+		lines[index] += ansi.ResetStyle
+	}
+	for len(lines) < rows {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clamp(v, low, high int) int {
+	if v < low {
+		return low
+	}
+	if v > high {
+		return high
+	}
+	return v
+}
