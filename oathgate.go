@@ -61,12 +61,18 @@ type Model struct {
 type termState struct {
 	transport Transport
 
-	mu     sync.Mutex
-	emu    *vt.Emulator
-	cols   int
-	rows   int
-	scroll int
-	closed bool
+	mu   sync.Mutex
+	emu  *vt.Emulator
+	cols int
+	rows int
+	// termCols and termRows are the emulator's dimensions. Usually the
+	// box's; a transport whose real terminal cannot follow the box (a
+	// tmux pane held wide by an attached client) sets them apart via
+	// SetTerminalSize, and the view clips.
+	termCols int
+	termRows int
+	scroll   int
+	closed   bool
 
 	scrollbackLines int
 	frames          chan struct{}
@@ -94,6 +100,7 @@ func New(transport Transport, cols, rows int, opts ...Option) Model {
 		opt(&m)
 	}
 	s := m.state
+	s.termCols, s.termRows = s.cols, s.rows
 	emu := vt.NewEmulator(s.cols, s.rows)
 	emu.Scrollback().SetMaxLines(s.scrollbackLines)
 	s.emu = emu
@@ -239,6 +246,7 @@ func (m Model) SetSize(cols, rows int) (Model, tea.Cmd) {
 	if cols != s.cols || rows != s.rows {
 		s.emu.Resize(cols, rows)
 		s.cols, s.rows = cols, rows
+		s.termCols, s.termRows = cols, rows
 	}
 	s.mu.Unlock()
 	return m, func() tea.Msg {
@@ -247,6 +255,29 @@ func (m Model) SetSize(cols, rows int) (Model, tea.Cmd) {
 		_ = s.transport.Resize(ctx, cols, rows)
 		return nil
 	}
+}
+
+// SetTerminalSize moves the emulator apart from the box: for transports
+// whose real terminal cannot follow the box size, the widget mirrors the
+// terminal and the view clips (bottom rows, left columns), exactly as
+// tmux shows a large window to a small client. SetSize re-unifies them.
+func (m Model) SetTerminalSize(cols, rows int) {
+	cols, rows = max(2, cols), max(2, rows)
+	s := m.state
+	s.mu.Lock()
+	if cols != s.termCols || rows != s.termRows {
+		s.emu.Resize(cols, rows)
+		s.termCols, s.termRows = cols, rows
+	}
+	s.mu.Unlock()
+}
+
+// TerminalSize reports the emulator's dimensions (see SetTerminalSize).
+func (m Model) TerminalSize() (cols, rows int) {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.termCols, s.termRows
 }
 
 // Size reports the box dimensions.
@@ -329,10 +360,13 @@ func (m Model) Cursor() (x, y int, ok bool) {
 		return 0, 0, false
 	}
 	cursor := s.emu.CursorPosition()
-	if cursor.X < 0 || cursor.X >= s.cols || cursor.Y < 0 || cursor.Y >= s.rows {
+	// A terminal taller than the box is clipped to its bottom rows; the
+	// cursor shifts with the clip.
+	row := cursor.Y - max(0, s.termRows-s.rows)
+	if cursor.X < 0 || cursor.X >= s.cols || row < 0 || row >= s.rows {
 		return 0, 0, false
 	}
-	return cursor.X, cursor.Y, true
+	return cursor.X, row, true
 }
 
 // Close detaches from the transport. The widget stops updating; whether
