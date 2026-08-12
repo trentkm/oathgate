@@ -208,3 +208,28 @@ func TestSetSizePropagates(t *testing.T) {
 		t.Fatalf("transport resized to %v, want [60 20]", transport.resized)
 	}
 }
+
+func TestTallTerminalClipFollowsTheCursor(t *testing.T) {
+	transport := newFakeTransport("")
+	m := New(transport, 40, 10)
+	defer m.Close()
+	m.SetTerminalSize(80, 30)
+	// Action at the TOP of the tall terminal: a grown pane's typical
+	// state. The box must show it, not the blank bottom.
+	transport.output <- []byte("\x1b[2;1Htop action here")
+	waitForView(t, m, "top action here")
+	x, y, ok := m.Cursor()
+	if !ok {
+		t.Fatal("cursor unavailable")
+	}
+	if y != 1 || x != 15 {
+		t.Fatalf("cursor at (%d,%d), want (15,1)", x, y)
+	}
+	// Action at the BOTTOM: the window slides down with the cursor.
+	transport.output <- []byte("\x1b[30;1Hbottom action")
+	waitForView(t, m, "bottom action")
+	lines := strings.Split(plain(m.View()), "\n")
+	if !strings.Contains(lines[9], "bottom action") {
+		t.Fatalf("bottom action not on box bottom row:\n%s", plain(m.View()))
+	}
+}
