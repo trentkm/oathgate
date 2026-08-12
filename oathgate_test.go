@@ -374,7 +374,7 @@ func fullHistoryReferenceView(m Model) string {
 	}
 	rows = append(rows, live...)
 	top := max(0, len(rows)-s.rows-s.scroll)
-	return fit(strings.Join(rows[top:min(len(rows), top+s.rows)], "\n"), s.cols, s.rows)
+	return fit(strings.Join(rows[top:min(len(rows), top+s.rows)], "\n"), s.cols, s.rows, s.paintBg)
 }
 
 func TestDeepScrollViewAllocationsAreBounded(t *testing.T) {

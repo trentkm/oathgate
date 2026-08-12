@@ -6,6 +6,7 @@ package oathgate
 
 import (
 	"context"
+	"image/color"
 	"io"
 	"strings"
 	"sync"
@@ -56,6 +57,17 @@ func WithReleaseKey(key string) Option {
 	return func(m *Model) { m.releaseKey = key }
 }
 
+// WithDefaultBackground paints every cell whose background the hosted
+// program left at the terminal default with c instead, and pads short rows
+// to the full box width in the same color. The box becomes an opaque
+// rectangle — its own ground rather than a window onto the embedding
+// terminal's — for embedders that want the widget to read as a distinct
+// surface. Off by default: default-background cells pass through unpainted.
+// See paint.go for why this must happen at render time.
+func WithDefaultBackground(c color.Color) Option {
+	return func(m *Model) { m.state.paintBg = bgSequence(c) }
+}
+
 // Model is the terminal box. It is a value like any bubble; the live
 // state lives behind a shared pointer so copies stay coherent.
 type Model struct {
@@ -89,9 +101,12 @@ type termState struct {
 	closed        bool
 
 	scrollbackLines int
-	frames          chan struct{}
-	lastNotify      time.Time
-	pending         *time.Timer
+	// paintBg, when non-empty, is the SGR that paints default-background
+	// cells at render time (see WithDefaultBackground and paint.go).
+	paintBg    string
+	frames     chan struct{}
+	lastNotify time.Time
+	pending    *time.Timer
 }
 
 // New builds a terminal box of cols x rows over a transport, replays the
@@ -430,7 +445,7 @@ func (m Model) View() string {
 		}
 		grid = strings.Join(lines, "\n")
 	}
-	return fit(grid, s.cols, s.rows)
+	return fit(grid, s.cols, s.rows, s.paintBg)
 }
 
 // Cursor reports the terminal cursor relative to the box's top-left cell.
@@ -482,17 +497,36 @@ func (m Model) Close() {
 }
 
 // fit clamps a rendered grid to exactly cols x rows: too-tall keeps the
-// bottom rows, too-wide keeps the left columns, too-small pads.
-func fit(grid string, cols, rows int) string {
+// bottom rows, too-wide keeps the left columns, too-small pads. A non-empty
+// bg additionally paints default-background cells and pads every row to the
+// full width in that color, so the box renders as an opaque rectangle.
+func fit(grid string, cols, rows int, bg string) string {
 	lines := strings.Split(grid, "\n")
 	if len(lines) > rows {
 		lines = lines[len(lines)-rows:]
 	}
-	for index, line := range lines {
-		if ansi.StringWidth(line) > cols {
-			lines[index] = ansi.Truncate(line, cols, "")
+	if bg != "" {
+		// Padding rows join the loop so they come out painted, not empty.
+		for len(lines) < rows {
+			lines = append(lines, "")
 		}
-		lines[index] += ansi.ResetStyle
+	}
+	for index, line := range lines {
+		width := ansi.StringWidth(line)
+		if width > cols {
+			line = ansi.Truncate(line, cols, "")
+			width = cols
+		}
+		if bg != "" {
+			line = paintDefaultBg(line, bg)
+			if width < cols {
+				// Re-assert bg before padding: the line may end inside an
+				// explicitly-styled run whose background would otherwise
+				// bleed into the pad.
+				line += bg + strings.Repeat(" ", cols-width)
+			}
+		}
+		lines[index] = line + ansi.ResetStyle
 	}
 	for len(lines) < rows {
 		lines = append(lines, "")
