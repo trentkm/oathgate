@@ -17,9 +17,14 @@ import (
 	"github.com/charmbracelet/x/vt"
 )
 
-// framePeriod caps UI wake-ups: a stream writing byte-by-byte must not
-// schedule a render per byte.
-const framePeriod = 33 * time.Millisecond
+const (
+	// framePeriod caps UI wake-ups: a stream writing byte-by-byte must not
+	// schedule a render per byte.
+	framePeriod = 33 * time.Millisecond
+	// scrollBurstPeriod keeps high-resolution trackpads from changing the
+	// view faster than a terminal can draw it.
+	scrollBurstPeriod = framePeriod
+)
 
 // DefaultScrollback bounds the widget's emulator history.
 const DefaultScrollback = 2000
@@ -29,6 +34,10 @@ var lastID atomic.Int64
 // FrameMsg says a widget has a new frame to draw. Route it (like every
 // message) through the widget's Update; unrelated instances ignore it.
 type FrameMsg struct {
+	ID int64
+}
+
+type scrollMsg struct {
 	ID int64
 }
 
@@ -72,7 +81,12 @@ type termState struct {
 	termCols int
 	termRows int
 	scroll   int
-	closed   bool
+	// Wheel events arrive every few milliseconds on high-resolution
+	// trackpads. Hold their combined movement until one scheduled update so
+	// intermediate Bubble Tea views remain unchanged.
+	scrollDelta   int
+	scrollPending bool
+	closed        bool
 
 	scrollbackLines int
 	frames          chan struct{}
@@ -122,8 +136,9 @@ func (s *termState) pump() {
 	for chunk := range s.transport.Output() {
 		s.mu.Lock()
 		s.emu.Write(chunk)
-		if s.scroll != 0 && s.emu.IsAltScreen() {
+		if s.emu.IsAltScreen() {
 			s.scroll = 0
+			s.scrollDelta = 0
 		}
 		s.mu.Unlock()
 		s.notify()
@@ -185,6 +200,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.wait()
+	case scrollMsg:
+		if msg.ID != m.id {
+			return m, nil
+		}
+		m.flushScroll()
+		return m, nil
 	case tea.KeyPressMsg:
 		if !m.focused {
 			return m, nil
@@ -206,9 +227,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		mouse := msg.Mouse()
 		switch mouse.Button {
 		case tea.MouseWheelUp:
-			m.ScrollBy(3)
+			return m, m.queueScroll(3)
 		case tea.MouseWheelDown:
-			m.ScrollBy(-3)
+			return m, m.queueScroll(-3)
 		}
 		return m, nil
 	}
@@ -300,12 +321,44 @@ func (m Model) ScrollBy(delta int) {
 	s.scroll = clamp(s.scroll+delta, 0, s.emu.ScrollbackLen())
 }
 
+func (m Model) queueScroll(delta int) tea.Cmd {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.emu.IsAltScreen() {
+		return nil
+	}
+	s.scrollDelta += delta
+	if s.scrollPending {
+		return nil
+	}
+	s.scrollPending = true
+	id := m.id
+	return tea.Tick(scrollBurstPeriod, func(time.Time) tea.Msg {
+		return scrollMsg{ID: id}
+	})
+}
+
+func (m Model) flushScroll() {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delta := s.scrollDelta
+	s.scrollDelta = 0
+	s.scrollPending = false
+	if s.closed || delta == 0 || s.emu.IsAltScreen() {
+		return
+	}
+	s.scroll = clamp(s.scroll+delta, 0, s.emu.ScrollbackLen())
+}
+
 // ScrollToBottom returns to the live tail.
 func (m Model) ScrollToBottom() {
 	s := m.state
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scroll = 0
+	s.scrollDelta = 0
 }
 
 // Scrolled reports how many lines above the live tail the view sits.
@@ -344,15 +397,28 @@ func (m Model) View() string {
 		}
 		grid = strings.Join(lines, "\n")
 	} else {
-		live := strings.Split(s.emu.Render(), "\n")
 		back := s.emu.Scrollback()
-		rows := make([]string, 0, back.Len()+len(live))
-		for index := 0; index < back.Len(); index++ {
-			rows = append(rows, back.Line(index).Render())
+		backRows := back.Len()
+		totalRows := backRows + s.termRows
+		top := max(0, totalRows-s.rows-s.scroll)
+		bottom := min(totalRows, top+s.rows)
+		lines := make([]string, 0, bottom-top)
+
+		// Render only the visible history window. Rendering the entire
+		// scrollback on every wheel event makes deep history progressively
+		// slower and can overwhelm the Bubble Tea renderer.
+		for index := top; index < min(bottom, backRows); index++ {
+			lines = append(lines, back.Line(index).Render())
 		}
-		rows = append(rows, live...)
-		top := max(0, len(rows)-s.rows-s.scroll)
-		grid = strings.Join(rows[top:min(len(rows), top+s.rows)], "\n")
+		if bottom > backRows {
+			live := strings.Split(s.emu.Render(), "\n")
+			liveTop := max(0, top-backRows)
+			liveBottom := min(len(live), bottom-backRows)
+			for index := liveTop; index < liveBottom; index++ {
+				lines = append(lines, live[index])
+			}
+		}
+		grid = strings.Join(lines, "\n")
 	}
 	return fit(grid, s.cols, s.rows)
 }
@@ -397,6 +463,7 @@ func (m Model) Close() {
 		s.pending.Stop()
 		s.pending = nil
 	}
+	s.scrollDelta = 0
 	s.mu.Unlock()
 	s.transport.Close()
 	if pw, ok := s.emu.InputPipe().(io.Closer); ok {

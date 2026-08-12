@@ -3,6 +3,7 @@ package oathgate
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -172,6 +173,111 @@ func TestScrollbackStitchesAndCursorHidesWhileScrolled(t *testing.T) {
 	}
 }
 
+func TestMouseWheelBurstIsAppliedOnce(t *testing.T) {
+	var seed strings.Builder
+	for index := 0; index < 500; index++ {
+		seed.WriteString("wheel history ")
+		seed.WriteString(strconv.Itoa(index))
+		seed.WriteString("\r\n")
+	}
+	transport := newFakeTransport(seed.String())
+	m := New(transport, 40, 8, WithScrollback(500))
+	defer m.Close()
+	m.Focus()
+
+	liveView := m.View()
+	var scheduled tea.Cmd
+	for index := 0; index < 100; index++ {
+		var cmd tea.Cmd
+		m, cmd = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+		if index == 0 {
+			if cmd == nil {
+				t.Fatal("first wheel event did not schedule a burst")
+			}
+			scheduled = cmd
+		} else if cmd != nil {
+			t.Fatalf("wheel event %d scheduled a second burst", index+1)
+		}
+		if m.Scrolled() != 0 {
+			t.Fatalf("wheel event %d changed scroll before the burst fired", index+1)
+		}
+		if got := m.View(); got != liveView {
+			t.Fatalf("wheel event %d changed the view before the burst fired", index+1)
+		}
+	}
+	if scheduled == nil {
+		t.Fatal("wheel burst was not scheduled")
+	}
+
+	burstMsg := scheduled()
+	if _, ok := burstMsg.(scrollMsg); !ok {
+		t.Fatalf("wheel burst emitted %T, want scrollMsg", burstMsg)
+	}
+	m, _ = m.Update(burstMsg)
+	if got := m.Scrolled(); got != 300 {
+		t.Fatalf("combined wheel burst scrolled %d lines, want 300", got)
+	}
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if cmd == nil {
+		t.Fatal("next wheel burst was not scheduled")
+	}
+	m.ScrollToBottom()
+	m, _ = m.Update(cmd())
+	if got := m.Scrolled(); got != 0 {
+		t.Fatalf("ScrollToBottom left a delayed scroll of %d lines", got)
+	}
+}
+
+func TestAlternateScreenDropsPendingMouseWheel(t *testing.T) {
+	transport := newFakeTransport("one\r\ntwo\r\nthree\r\nfour\r\n")
+	m := New(transport, 20, 2)
+	defer m.Close()
+	m.Focus()
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if cmd == nil {
+		t.Fatal("wheel event did not schedule a burst")
+	}
+	transport.output <- []byte("\x1b[?1049h")
+	deadline := time.Now().Add(time.Second)
+	for !m.AltScreen() {
+		if time.Now().After(deadline) {
+			t.Fatal("terminal did not enter alternate screen")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	m, _ = m.Update(cmd())
+	if got := m.Scrolled(); got != 0 {
+		t.Fatalf("alternate screen applied a delayed scroll of %d lines", got)
+	}
+}
+
+func TestHorizontalMouseWheelDoesNothing(t *testing.T) {
+	transport := newFakeTransport("one\r\ntwo\r\nthree\r\nfour\r\n")
+	m := New(transport, 20, 2)
+	defer m.Close()
+	m.Focus()
+
+	view := m.View()
+	for _, button := range []tea.MouseButton{tea.MouseWheelLeft, tea.MouseWheelRight} {
+		var cmd tea.Cmd
+		m, cmd = m.Update(tea.MouseWheelMsg{Button: button})
+		if cmd != nil {
+			t.Fatalf("%s wheel event scheduled a scroll", button)
+		}
+		if got := m.Scrolled(); got != 0 {
+			t.Fatalf("%s wheel event scrolled %d lines", button, got)
+		}
+		if got := m.View(); got != view {
+			t.Fatalf("%s wheel event changed the view", button)
+		}
+	}
+}
+
 func TestFrameMsgRoutingByID(t *testing.T) {
 	transportA := newFakeTransport("")
 	transportB := newFakeTransport("")
@@ -231,5 +337,77 @@ func TestTallTerminalClipFollowsTheCursor(t *testing.T) {
 	lines := strings.Split(plain(m.View()), "\n")
 	if !strings.Contains(lines[9], "bottom action") {
 		t.Fatalf("bottom action not on box bottom row:\n%s", plain(m.View()))
+	}
+}
+
+func TestDeepScrollMatchesFullHistoryReference(t *testing.T) {
+	var seed strings.Builder
+	for index := 0; index < 300; index++ {
+		seed.WriteString("history line ")
+		seed.WriteString(strconv.Itoa(index))
+		seed.WriteString("\r\n")
+	}
+	transport := newFakeTransport(seed.String())
+	m := New(transport, 40, 8, WithScrollback(300))
+	defer m.Close()
+
+	for _, offset := range []int{1, 25, 150, 1 << 30} {
+		m.ScrollToBottom()
+		m.ScrollBy(offset)
+		if got, want := m.View(), fullHistoryReferenceView(m); got != want {
+			t.Fatalf("view at offset %d differs from full-history reference\ngot:\n%s\nwant:\n%s",
+				offset, plain(got), plain(want))
+		}
+	}
+}
+
+func fullHistoryReferenceView(m Model) string {
+	s := m.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	live := strings.Split(s.emu.Render(), "\n")
+	back := s.emu.Scrollback()
+	rows := make([]string, 0, back.Len()+len(live))
+	for index := 0; index < back.Len(); index++ {
+		rows = append(rows, back.Line(index).Render())
+	}
+	rows = append(rows, live...)
+	top := max(0, len(rows)-s.rows-s.scroll)
+	return fit(strings.Join(rows[top:min(len(rows), top+s.rows)], "\n"), s.cols, s.rows)
+}
+
+func TestDeepScrollViewAllocationsAreBounded(t *testing.T) {
+	var seed strings.Builder
+	for index := 0; index < DefaultScrollback+100; index++ {
+		seed.WriteString("allocation regression line with styled \x1b[32mcontent\x1b[0m\r\n")
+	}
+	transport := newFakeTransport(seed.String())
+	m := New(transport, 80, 24)
+	defer m.Close()
+	m.ScrollBy(DefaultScrollback / 2)
+
+	allocations := testing.AllocsPerRun(10, func() {
+		_ = m.View()
+	})
+	if allocations > 1000 {
+		t.Fatalf("deep scroll view made %.0f allocations, want at most 1000", allocations)
+	}
+}
+
+func BenchmarkViewDeepInScrollback(b *testing.B) {
+	var seed strings.Builder
+	for index := 0; index < DefaultScrollback+100; index++ {
+		seed.WriteString("scrollback benchmark line with enough content to render\r\n")
+	}
+	transport := newFakeTransport(seed.String())
+	m := New(transport, 80, 24)
+	defer m.Close()
+	m.ScrollBy(DefaultScrollback / 2)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = m.View()
 	}
 }
